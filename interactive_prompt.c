@@ -25,9 +25,10 @@ void add_history(char* unused) {}
 #include <editline/readline.h>
 #endif
 
-static char* exitStr = ":q";
 
 int main(int argc, char** argv) {
+  static char* exit_str = ":q";
+
   /* Print Version and Exit Information */
   puts("Lispy Version 0.0.0.0.1");
   puts("Press Ctrl+c or input :q to Exit\n");
@@ -40,8 +41,8 @@ int main(int argc, char** argv) {
     /* Add input to history */
     add_history(input);
 
-    int isExit = strncmp(input, exitStr, 2);
-    if (isExit == 0) {
+    /* Check input for :q */
+    if (!strncmp(input, exit_str, 2)) {
       break;
     }
 
