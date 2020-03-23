@@ -1,23 +1,55 @@
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 
-/* Declare a buffer for user input of size 2048 */
-static char input[2048];
+/* If we are compiling on Windows compile these functions */
+#ifdef _WIN32
+#include <string.h>
+static char buffer[2048];
+
+/* Fake readline function */
+char* readline(char* prompt) {
+  fputs(prompt, stdout);
+  fgets(buffer, 2048, stdin);
+  char* cpy = malloc(strlen(buffer)+1);
+  strcpy(cpy, buffer);
+  cpy[strlen(cpy)-1] = '\0';
+  return cpy;
+}
+
+/* Fake add_history function */
+void add_history(char* unused) {}
+
+/* Otherwise include the editline headers */
+#else
+#include <editline/readline.h>
+#endif
+
+static char* exitStr = ":q";
 
 int main(int argc, char** argv) {
   /* Print Version and Exit Information */
   puts("Lispy Version 0.0.0.0.1");
-  puts("Press Ctrl+c to Exit\n");
+  puts("Press Ctrl+c or input :q to Exit\n");
 
   /* In a never ending loop */
   while (1) {
-    /* Output our prompt */
-    fputs("lispy> ", stdout);
+    /* Output our prompt and get input */
+    char* input = readline("blisp> ");
 
-    /* Read a line of user input of maximum size 2048 */
-    fgets(input, 2048, stdin);
+    /* Add input to history */
+    add_history(input);
+
+    int isExit = strncmp(input, exitStr, 2);
+    if (isExit == 0) {
+      break;
+    }
 
     /* Echo input back to user */
-    printf("No you're a %s", input);
+    printf("Can't process: %s\n", input);
+
+    /* Free retrieved input */
+    free(input);
   }
 
   return 0;
