@@ -28,7 +28,7 @@ void add_history(char* unused) {}
 #endif
 
 /* Declare New lval (Lisp Value) Struct */
-typedef struct {
+typedef struct lval {
   int type;
   long num;
   /* Error and Symbol types have some string data */
@@ -83,7 +83,7 @@ lval* lval_sexpr(void) {
 void lval_del(lval* v) {
   switch (v->type) {
     /* Do nothing for number type */
-    case LVAL_NUM: 
+    case LVAL_NUM:
       break;
     /* For Err or Sym free the string data */
     case LVAL_ERR:
@@ -94,9 +94,11 @@ void lval_del(lval* v) {
       break;
     /* If Sexpr then delete all elements inside */
     case LVAL_SEXPR:
-      for (int i = 0; i < v-> count; i++) {
+      for (int i = 0; i < v->count; i++) {
         lval_del(v->cell[i]);
       }
+      /* Free the memory allocated to contain the pointers */
+      free(v->cell);
       break;
   }
 
@@ -126,15 +128,16 @@ lval* lval_read(mpc_ast_t* t) {
   } else if (strstr(t->tag, "symbol")) {
     x = lval_sym(t->contents);
   } else {
-    if (strcmp(t->tag, ">") == 0 || strcmp(t->tag, "sexpr")) {
+    if (strcmp(t->tag, ">") == 0 || strstr(t->tag, "sexpr")) {
       x = lval_sexpr();
     }
 
     /* Fill this list with any valid expression contained within */
     for (int i = 0; i < t->children_num; i++) {
-      if (strcmp(t->children[i]->contents, "(")  == 0 
-        || strcmp(t->children[i]->contents, "(") == 0
-        || strcmp(t->children[i]->tag, "regex")  == 0) {
+      if (strcmp(t->children[i]->contents, "(")  == 0
+        || strcmp(t->children[i]->contents, ")") == 0
+        || strcmp(t->children[i]->tag, "regex")  == 0
+      ) {
         continue;
       }
       x = lval_add(x, lval_read(t->children[i]));
@@ -142,6 +145,9 @@ lval* lval_read(mpc_ast_t* t) {
   }
   return x;
 }
+
+/* Forward declaration to resolve dependency */
+void lval_print(lval* v);
 
 void lval_expr_print(lval* v, char open, char close) {
   putchar(open);
@@ -158,12 +164,12 @@ void lval_expr_print(lval* v, char open, char close) {
 
 /* Print an lval */
 void lval_print(lval* v) {
-  switch (v.type) {
+  switch (v->type) {
     case LVAL_NUM:
       printf("%li", v->num);
       break;
     case LVAL_ERR:
-      printf("%s", v->err);
+      printf("Error: %s", v->err);
       break;
     case LVAL_SYM:
       printf("%s", v->sym);
@@ -179,77 +185,6 @@ void lval_println(lval* v) {
   putchar('\n');
 }
 
-/* Use operator string to see which operation to perform */
-lval eval_op(lval x, char* op, lval y) {
-  if (x.type == LVAL_ERR) {
-    return x;
-  } else if (y.type == LVAL_ERR) {
-    return y;
-  }
-
-  long res;
-  if (strcmp(op, "min") == 0) {
-    res = fminl(x.num, y.num);
-  } else if (strcmp(op, "max") == 0) {
-    res = fmaxl(x.num, y.num);
-  } else {
-    /* First char of string will always be math op */
-    switch(op[0]) {
-      case '+':
-        res = x.num + y.num;
-        break;
-      case '-':
-        res = x.num - y.num;
-        break;
-      case '*':
-        res = x.num * y.num;
-        break;
-      case '/':
-        if (y.num == 0) {
-          return lval_err(LERR_DIV_ZERO);
-        } else {
-          res = x.num / y.num;
-        }
-        break;
-      case '%':
-        res = x.num % y.num;
-        break;
-      case '^':
-        res = pow(x.num, y.num);
-        break;
-      default:
-        return lval_err(LERR_BAD_OP);
-    }
-  }
-
-  /* Convert long to lval and return */
-  return lval_num(res);
-}
-
-lval eval(mpc_ast_t* t) {
-  /* If tagged as number return it directly */
-  if (strstr(t->tag, "number")) {
-    /* Check if there is some error in conversion */
-    errno = 0;
-    long x = strtol(t->contents, NULL, 10);
-    return errno != ERANGE ? lval_num(x) : lval_err(LERR_BAD_NUM);
-  }
-
-  /* The operator is always the second child. */
-  char* op = t->children[1]->contents;
-
-  /* Store the thirld child */
-  lval x = eval(t-> children[2]);
-
-  /* Iterate the remaining children and add them to the result */
-  for (int i = 3; strstr(t->children[i]->tag, "expr"); i++) {
-    x = eval_op(x, op, eval(t->children[i]));
-  }
-
-  return x;
-}
-
-
 int main(int argc, char** argv) {
   /* Create Parsers */
   mpc_parser_t* Number = mpc_new("number");
@@ -260,12 +195,12 @@ int main(int argc, char** argv) {
 
   /* Define them within the following language */
   mpca_lang(MPCA_LANG_DEFAULT,
-    "                                                                    \
-      number   : /-?[0-9]+/ ;                                            \
-      operator : '+' | '-' | '*' | '/' | '%' | '^' | \"max\" | \"min\" ; \
-      sexpr    : '(' <expr>* ')' ;                                       \
-      expr     : <number> | <symbol> | <sexpr> ;                         \
-      lispy    : /^/ <expr>* /$/ ;                            \
+    "                                          \
+      number : /-?[0-9]+/ ;                    \
+      symbol : '+' | '-' | '*' | '/'         ; \
+      sexpr  : '(' <expr>* ')' ;               \
+      expr   : <number> | <symbol> | <sexpr> ; \
+      lispy  : /^/ <expr>* /$/ ;               \
     ",
     Number, Symbol, Sexpr, Expr, Lispy
   );
@@ -291,9 +226,9 @@ int main(int argc, char** argv) {
     mpc_result_t r;
     if (mpc_parse("<stdin>", input, Lispy, &r)) {
       /* Evaluate input, print result, then cleanup */
-      lval result = eval(r.output);
-      lval_println(result);
-      mpc_ast_delete(r.output);
+      lval* x = lval_read(r.output);
+      lval_println(x);
+      lval_del(x);
     } else {
       /* Otherwise Print the Error */
       mpc_err_print(r.error);
