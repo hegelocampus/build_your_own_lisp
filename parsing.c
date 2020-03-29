@@ -192,8 +192,125 @@ lval* builtin_op(lval* a, char* op) {
   return x;
 }
 
+lval* lval_read_num(mpc_ast_t* t) {
+  errno = 0;
+  long x = strtol(t->contents, NULL, 10);
+  return errno != ERANGE ?
+    lval_num(x) : lval_err("invalid number");
+}
+
+lval* lval_add(lval* v, lval* x) {
+  v->count++;
+  v->cell = realloc(v->cell, sizeof(lval*) * v->count);
+  v->cell[v->count-1] = x;
+  return v;
+}
+
+#define LASSERT(args, cond, err) \
+  if (!(cond)) {                 \
+    lval_del(args);              \
+    return lval_err(err);        \
+  }
+
+lval* builtin_head(lval* a) {
+  /* Check Error Conditions */
+  LASSERT(a, a->count == 1,
+      "Function 'head' passed too many arguments!");
+  LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
+      "Function 'head' passed incorrect type!");
+  LASSERT(a, a->cell[0]->count != 0,
+      "Function 'head' passed {}!");
+
+  /* Take first arg */
+  lval* v = lval_take(a, 0);
+
+  /* Delete all elements that are not head and return */
+  while (v->count > 1) {
+    lval_del(lval_pop(v, 1));
+  }
+  return v;
+}
+
+lval* builtin_tail(lval* a) {
+  /* Check Error Conditions */
+  LASSERT(a, a->count == 1,
+      "Function 'tail' passed too many arguments!");
+  LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
+      "Function 'tail' passed incorrect type!");
+  LASSERT(a, a->cell[0]->count != 0,
+      "Function 'tail' passed {}!");
+
+  /* Take first arg */
+  lval* v = lval_take(a, 0);
+
+  /* Delete first element and return */
+  lval_del(lval_pop(v, 0));
+  return v;
+}
+
+lval* builtin_list(lval* a) {
+  a->type = LVAL_QEXPR;
+  return a;
+}
+
 /* Forward declaration */
 lval* lval_eval(lval* v);
+
+lval* builtin_eval(lval* a) {
+  LASSERT(a, a->count == 1,
+      "Function 'eval' passed too many arguments!");
+  LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
+      "Function 'eval' passed incorrect type!");
+
+  lval* x = lval_take(a, 0);
+  x->type = LVAL_SEXPR;
+  return lval_eval(x);
+}
+
+lval* lval_join(lval* x, lval* y) {
+  /* For each cell in 'y' add it to 'x' */
+  while (y->count) {
+    x = lval_add(x, lval_pop(y, 0));
+  }
+
+  /* Delete the empty 'y' */
+  lval_del(y);
+  return x;
+}
+
+lval* builtin_join(lval* a) {
+  for (int i = 0; i< a->count; i++) {
+    LASSERT(a, a->cell[i]->type == LVAL_QEXPR,
+        "Function 'join' passed incorrect type!");
+  }
+
+  lval* x = lval_pop(a, 0);
+  while (a->count) {
+    x = lval_join(x, lval_pop(a, 0));
+  }
+
+  lval_del(a);
+  return x;
+}
+
+lval* builtin(lval* a, char* func) {
+  if (strcmp("list", func) == 0) {
+    return builtin_list(a);
+  } else if (strcmp("head", func) == 0) {
+    return builtin_head(a);
+  } else if (strcmp("tail", func) == 0) {
+    return builtin_tail(a);
+  } else if (strcmp("join", func) == 0) {
+    return builtin_join(a);
+  } else if (strcmp("eval", func) == 0) {
+    return builtin_eval(a);
+  } else if (strstr("+-/*", func)) {
+    return builtin_op(a, func);
+  } else {
+    lval_del(a);
+    return lval_err("Unknown Function!");
+  }
+}
 
 lval* lval_eval_sexpr(lval* v) {
   /*Evaluate Children */
@@ -222,7 +339,7 @@ lval* lval_eval_sexpr(lval* v) {
     lval_del(v);
     return lval_err("S-expression Does not start with symbol!");
   } else {
-    lval* result = builtin_op(v, f->sym);
+    lval* result = builtin(v, f->sym);
     lval_del(f);
     return result;
   }
@@ -231,64 +348,6 @@ lval* lval_eval_sexpr(lval* v) {
 lval* lval_eval(lval* v) {
   /* Eval Sexpressions */
   return (v->type == LVAL_SEXPR) ? lval_eval_sexpr(v) : v;
-}
-
-lval* lval_read_num(mpc_ast_t* t) {
-  errno = 0;
-  long x = strtol(t->contents, NULL, 10);
-  return errno != ERANGE ?
-    lval_num(x) : lval_err("invalid number");
-}
-
-lval* lval_add(lval* v, lval* x) {
-  v->count++;
-  v->cell = realloc(v->cell, sizeof(lval*) * v->count);
-  v->cell[v->count-1] = x;
-  return v;
-}
-
-lval* builtin_head(lval* a) {
-  /* Check Error Conditions */
-  if (a->count != 1) {
-    lval_del(a);
-    return lval_err("Function 'head' passed too many arguments!");
-  } else if (a->cell[0]->type != LVAL_QEXPR) {
-    lval_del(a);
-    return lval_err("Function 'head' passed incorrect type!");
-  } else if (a->cell[0]->count == 0) {
-    lval_del(a);
-    return lval_err("Function 'head' passed {}!");
-  }
-
-  /* Otherwise take first arg */
-  lval* v = lval_take(a, 0);
-
-  /* Delete all elements that are not head and return */
-  while (v->count > 1) {
-    lval_del(lval_pop(v, 1));
-  }
-  return v;
-}
-
-lval* builtin_tail(lval* a) {
-  /* Check Error Conditions */
-  if (a->count != 1) {
-    lval_del(a);
-    return lval_err("Function 'head' passed too many arguments!");
-  } else if (a->cell[0]->type != LVAL_QEXPR) {
-    lval_del(a);
-    return lval_err("Function 'head' passed incorrect type!");
-  } else if (a->cell[0]->count == 0) {
-    lval_del(a);
-    return lval_err("Function 'head' passed {}!");
-  }
-
-  /* Take first arg */
-  lval* v = lval_take(a, 0);
-
-  /* Delete first element and return */
-  lval_del(lval_pop(v, 0));
-  return v;
 }
 
 lval* lval_read(mpc_ast_t* t) {
