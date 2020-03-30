@@ -27,29 +27,73 @@ void add_history(char* unused) {}
 #include <editline/readline.h>
 #endif
 
+/* Forward Declarations */
+struct lval;
+struct lenv;
+typedef struct lval lval;
+typedef struct lenv lenv;
+
+/* Create enumeration of possible lval types */
+enum {
+  LVAL_ERR, LVAL_NUM, LVAL_SYM, LVAL_FUN, LVAL_SEXPR, LVAL_QEXPR
+};
+
+typedef lval*(*lbuiltin)(lenv*, lval*);
+
 /* Declare New lval (Lisp Value) Struct */
-typedef struct lval {
+struct lval {
   int type;
+
   long num;
   /* Error and Symbol types have some string data */
   char* err;
   char* sym;
-  /* Count and Pointer to list of "lval*" */
-  int count;
-  struct lval** cell;
-} lval;
+  lbuiltin fun;
 
-/* Create enumeration of possible lval types */
-enum { LVAL_ERR, LVAL_NUM, LVAL_SYM, LVAL_SEXPR, LVAL_QEXPR };
+  /* Pointer to list of "lval*" and length of pointers arr */
+  struct lval** cell;
+  int count;
+};
+
+struct lenv {
+  int count;
+  char** syms;
+  lval** vals;
+};
 
 /* Create enumeration of possible error types */
 enum { LERR_DIV_ZERO, LERR_BAD_OP, LERR_BAD_NUM };
+
+lenv* lenv_new(void) {
+  lenv* e = malloc(sizeof(lenv));
+  e->count = 0;
+  e->syms = NULL;
+  e->vals = NULL;
+  return e;
+}
+
+void lenv_del(lenv* e) {
+  for (int i = 0; i < e->count; i++) {
+    free(e->syms[i]);
+    lval_del(e->vals[i]);
+  }
+  free(e->syms);
+  free(e->vals);
+  free(e);
+}
 
 /* Create a pointer to a new Number lval */
 lval* lval_num(long x) {
   lval* v = malloc(sizeof(lval));
   v->type = LVAL_NUM;
   v->num = x;
+  return v;
+}
+
+lval* lval_fun(lbuiltin func) {
+  lval* v = malloc(sizeof(lval));
+  v->type = LVAL_FUN;
+  v->fun = func;
   return v;
 }
 
@@ -92,6 +136,7 @@ lval* lval_qexpr(void) {
 void lval_del(lval* v) {
   switch (v->type) {
     /* Do nothing for number type */
+    case LVAL_FUN:
     case LVAL_NUM:
       break;
     /* For Err or Sym free the string data */
@@ -381,6 +426,77 @@ lval* lval_read(mpc_ast_t* t) {
   return x;
 }
 
+lval* lval_copy(lval* old) {
+  lval* new = malloc(sizeof(lval));
+  new->type = old->type;
+
+  switch (old->type) {
+    /* Copy Functions and Numbers Directly */
+    case LVAL_FUN:
+      new->fun = old->fun;
+      break;
+    case LVAL_NUM:
+      new->fun = old->fun;
+      break;
+    /* Copy Strings using malloc and strcpy */
+    case LVAL_ERR:
+      new->err = malloc(strlen(old->sym) + 1);
+      strcpy(new->err, old->err);
+      break;
+    case LVAL_SYM:
+      new->sym = malloc(strlen(old->sym) + 1);
+      strcpy(new->sym, old->sym);
+      break;
+    /* Copy Lists by coping each sub-expression */
+    case LVAL_SEXPR:
+    case LVAL_QEXPR:
+      new->count = old->count;
+      new->cell = malloc(sizeof(lval*) * x->count);
+      for (int i = 0; i< new->count; i++) {
+        new->cell[i] = lval_copy(v->cell[i]);
+      }
+      break;
+  }
+  return new;
+}
+
+lval* lenv_get(lenv* e, lval* k) {
+  /* Iterate over all items in environment */
+  for (int i = 0; i < e->count; i++) {
+    /* Check if the stored string matches the symbol string */
+    /* If it does, return a copy of the value */
+    if (strcpm(e->syms[i], k->sym) == 0) {
+      return lval_copy(e->vals[i]);
+    }
+  }
+  /* If no symbol found return error */
+  return lval_err("unbound symbol!");
+}
+
+void lenv_put(lenv* e, lval* var_name, lval* new_val) {
+  /* Iterate over all items in environment */
+  /* This is to see if variable already exists */
+  for (int i = 0; i < e->count; i++) {
+    /* If the variable is found, delete item at that position */
+    if (strcmp(e->syms[i], var_name->sym) == 0) {
+      lval_del(e->vals[i]);
+      /* Then replate with variable supplied by user */
+      e->vals[i] = lval_copy(new_val);
+      return;
+    }
+  }
+
+  /* If no existing entry is found allocate space for a new entry */
+  e->count++;
+  e->vals = realloc(e->vals, sizeof(lval*) * e->count);
+  e->syms = realloc(e->syms, sizeof(char*) * e->count);
+
+  /* Copy contents of lval and symbol string into new location */
+  e->vals[e->count-1] = lval_copy(new_val);
+  e->syms[e->count-1] = malloc(strlen(var_name->sym)+1);
+  strcpy(e->syms[e->count-1], k->sym);
+}
+
 /* Forward declaration to resolve dependency */
 void lval_print(lval* v);
 
@@ -405,6 +521,9 @@ void lval_print(lval* v) {
       break;
     case LVAL_ERR:
       printf("Error: %s", v->err);
+      break;
+    case LVAL_FUN:
+      printf("<function>");
       break;
     case LVAL_SYM:
       printf("%s", v->sym);
@@ -436,8 +555,7 @@ int main(int argc, char** argv) {
   mpca_lang(MPCA_LANG_DEFAULT,
     "                                                    \
       number : /-?[0-9]+/ ;                              \
-      symbol : \"list\" | \"head\" | \"tail\" | \"join\" \
-             | \"eval\" | '+' | '-' | '*' | '/' ;        \
+      symbol : /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&]+/ ;        \
       sexpr  : '(' <expr>* ')' ;                         \
       qexpr  : '{' <expr>* '}' ;                         \
       expr   : <number> | <symbol> | <sexpr> | <qexpr> ; \
